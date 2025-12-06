@@ -138,6 +138,20 @@ struct Individual
 using Population = std::vector<Individual>;
 using FOS = std::vector<std::vector<int>>; // Family of Subsets
 
+static void print_FOS(const FOS &fos)
+{
+    std::cout << "FOS subsets:\n";
+    for (size_t i = 0; i < fos.size(); ++i)
+    {
+        std::cout << "  Subset " << i << ": { ";
+        for (int pos : fos[i])
+        {
+            std::cout << pos << " ";
+        }
+        std::cout << "}\n";
+    }
+}
+
 // Evaluate one program on one sample using a simple stack-based VM.
 // If the program is invalid (stack underflow, wrong final stack size, NaN),
 // we return a large penalty.
@@ -310,6 +324,152 @@ static FOS make_univariate_fos(int genome_len)
     return fos;
 }
 
+// Compute pairwise mutual information between genome positions
+// using discrete token values in the current population.
+static std::vector<std::vector<double>>
+compute_mutual_information_matrix(const Population &pop, int genome_len)
+{
+    const int n = genome_len;
+    std::vector<std::vector<double>> mi(n, std::vector<double>(n, 0.0));
+
+    if (pop.empty())
+        return mi;
+
+    const int ALPHABET_SIZE = TOKEN_MAX - TOKEN_MIN + 1;
+    const double N = static_cast<double>(pop.size());
+
+    for (int i = 0; i < n; ++i)
+    {
+        for (int j = i + 1; j < n; ++j)
+        {
+            std::array<int, ALPHABET_SIZE> count_i{};
+            std::array<int, ALPHABET_SIZE> count_j{};
+            std::array<std::array<int, ALPHABET_SIZE>, ALPHABET_SIZE> count_ij{};
+
+            // count frequencies over population
+            for (const auto &ind : pop)
+            {
+                int vi = ind.genome[i] - TOKEN_MIN;
+                int vj = ind.genome[j] - TOKEN_MIN;
+                if (vi < 0 || vi >= ALPHABET_SIZE ||
+                    vj < 0 || vj >= ALPHABET_SIZE)
+                    continue; // ignore out-of-range tokens
+
+                count_i[vi]++;
+                count_j[vj]++;
+                count_ij[vi][vj]++;
+            }
+
+            double mi_ij = 0.0;
+
+            for (int a = 0; a < ALPHABET_SIZE; ++a)
+            {
+                double pi = count_i[a] / N;
+                if (pi <= 0.0)
+                    continue;
+
+                for (int b = 0; b < ALPHABET_SIZE; ++b)
+                {
+                    double pj = count_j[b] / N;
+                    int cij = count_ij[a][b];
+                    if (pj <= 0.0 || cij == 0)
+                        continue;
+
+                    double pij = cij / N;
+                    double denom = pi * pj;
+                    if (denom <= 0.0)
+                        continue;
+
+                    double ratio = pij / denom;
+                    mi_ij += pij * std::log(ratio); // nat log; base doesn't matter
+                }
+            }
+
+            if (mi_ij < 0.0)
+                mi_ij = 0.0; // numerical noise clamp
+
+            mi[i][j] = mi_ij;
+            mi[j][i] = mi_ij;
+        }
+    }
+
+    return mi;
+}
+
+// Build a linkage-tree-style FOS from the current population,
+// using mutual information as similarity between variables.
+static FOS build_linkage_tree_fos(const Population &pop, int genome_len)
+{
+    FOS fos;
+    if (genome_len <= 0 || pop.empty())
+        return fos;
+
+    // 1. Compute base MI matrix
+    auto mi = compute_mutual_information_matrix(pop, genome_len);
+
+    // 2. Initial clusters: each variable alone
+    std::vector<std::vector<int>> clusters;
+    clusters.reserve(genome_len);
+    for (int i = 0; i < genome_len; ++i)
+        clusters.push_back({i});
+
+    // Start FOS with univariate subsets
+    fos = clusters;
+
+    // 3. Agglomerative clustering:
+    // repeatedly merge the pair of clusters with highest average MI.
+    while (clusters.size() > 1)
+    {
+        double best_score = -std::numeric_limits<double>::infinity();
+        int best_a = -1, best_b = -1;
+
+        for (int a = 0; a < (int)clusters.size(); ++a)
+        {
+            for (int b = a + 1; b < (int)clusters.size(); ++b)
+            {
+                double sum = 0.0;
+                int cnt = 0;
+
+                for (int i : clusters[a])
+                {
+                    for (int j : clusters[b])
+                    {
+                        sum += mi[i][j];
+                        ++cnt;
+                    }
+                }
+
+                double avg = (cnt > 0) ? (sum / cnt) : 0.0;
+
+                if (avg > best_score)
+                {
+                    best_score = avg;
+                    best_a = a;
+                    best_b = b;
+                }
+            }
+        }
+
+        if (best_a == -1 || best_b == -1)
+            break; // degenerate case: no usable merge
+
+        // 4. Merge best_a and best_b
+        std::vector<int> merged = clusters[best_a];
+        merged.insert(merged.end(),
+                      clusters[best_b].begin(), clusters[best_b].end());
+        std::sort(merged.begin(), merged.end());
+
+        // Append merged cluster to FOS
+        fos.push_back(merged);
+
+        // Replace cluster a with merged, erase b
+        clusters[best_a] = std::move(merged);
+        clusters.erase(clusters.begin() + best_b);
+    }
+
+    return fos;
+}
+
 // One GOMEA generation using given FOS.
 static void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng)
 {
@@ -381,10 +541,7 @@ static void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std
     }
 }
 
-static Dataset make_synthetic_dataset(
-    int n_samples,
-    const std::vector<int> &target_prog,
-    std::mt19937 &rng)
+static Dataset make_synthetic_dataset(int n_samples, const std::vector<int> &target_prog, std::mt19937 &rng)
 {
     Dataset data;
     data.reserve(n_samples);
@@ -436,7 +593,6 @@ int main()
     }
 
     const int actual_genome_len = (int)pop.front().genome.size();
-    FOS fos = make_univariate_fos(actual_genome_len);
 
     auto get_best = [&]()
     {
@@ -452,6 +608,10 @@ int main()
 
     for (int gen = 0; gen < MAX_GENERATIONS; ++gen)
     {
+        // Rebuild FOS from current population using MI-based linkage tree
+        FOS fos = build_linkage_tree_fos(pop, actual_genome_len);
+        // print_FOS(fos); // uncomment to debug FOS
+
         gomea_step(pop, fos, data, rng);
         best_it = get_best();
         std::cout << "Gen " << gen + 1 << ": best fitness = " << best_it->fitness << '\n';
@@ -460,10 +620,10 @@ int main()
     std::cout << "Done. Final best fitness: " << best_it->fitness << '\n';
 
     // Print final program
-    std::cout << "Target program (postfix): "
+    std::cout << "Best program (postfix): "
               << program_to_postfix_string(best_it->genome) << "\n";
 
-    std::cout << "Target program (infix):   "
+    std::cout << "Best program (infix):   "
               << program_to_infix_string(best_it->genome) << "\n";
 
     return 0;
