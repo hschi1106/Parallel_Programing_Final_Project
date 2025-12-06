@@ -138,6 +138,7 @@ struct Individual
 using Population = std::vector<Individual>;
 using FOS = std::vector<std::vector<int>>; // Family of Subsets
 
+[[maybe_unused]]
 static void print_FOS(const FOS &fos)
 {
     std::cout << "FOS subsets:\n";
@@ -313,6 +314,7 @@ static Individual random_individual(int genome_len, std::mt19937 &rng, const Dat
 }
 
 // Univariate FOS: each position alone
+[[maybe_unused]]
 static FOS make_univariate_fos(int genome_len)
 {
     FOS fos;
