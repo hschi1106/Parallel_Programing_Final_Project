@@ -8,126 +8,27 @@
 
 struct Sample
 {
-    double x;
-    double y;
+    std::vector<double> inputs;
+    double output;
 };
 
 using Dataset = std::vector<Sample>;
 
-// Token encoding
-// 0: variable x
-// 1: constant 1.0
-// 2: constant 2.0
-// 3: ADD
-// 4: SUB
-// 5: MUL
-// 6: DIV (protected)
-
 enum Token : int
 {
-    VAR_X = 0,
-    CONST_1 = 1,
-    CONST_2 = 2,
-    OP_ADD = 3,
-    OP_SUB = 4,
-    OP_MUL = 5,
-    OP_DIV = 6,
+    OP_ADD = 0,
+    OP_SUB = 1,
+    OP_MUL = 2,
+    OP_DIV = 3,
+    OP_SIN = 4,
+    OP_COS = 5,
+    OP_EXP = 6,
+    VAR_1 = 7,
+    VAR_2 = 8,
+    VAR_3 = 9,
     TOKEN_MIN = 0,
-    TOKEN_MAX = 6
+    TOKEN_MAX = 9
 };
-
-static std::string token_to_string(int tok)
-{
-    switch (tok)
-    {
-    case VAR_X:
-        return "x";
-    case CONST_1:
-        return "1";
-    case CONST_2:
-        return "2";
-    case OP_ADD:
-        return "+";
-    case OP_SUB:
-        return "-";
-    case OP_MUL:
-        return "*";
-    case OP_DIV:
-        return "/";
-    default:
-        return "?";
-    }
-}
-
-static std::string program_to_postfix_string(const std::vector<int> &prog)
-{
-    std::ostringstream oss;
-    for (size_t i = 0; i < prog.size(); ++i)
-    {
-        if (i > 0)
-            oss << ' ';
-        oss << token_to_string(prog[i]);
-    }
-    return oss.str();
-}
-
-static std::string program_to_infix_string(const std::vector<int> &prog)
-{
-    std::vector<std::string> st;
-    st.reserve(32);
-
-    auto is_operator = [](int tok)
-    {
-        return tok == OP_ADD || tok == OP_SUB || tok == OP_MUL || tok == OP_DIV;
-    };
-
-    auto op_to_string = [](int tok) -> std::string
-    {
-        switch (tok)
-        {
-        case OP_ADD:
-            return "+";
-        case OP_SUB:
-            return "-";
-        case OP_MUL:
-            return "*";
-        case OP_DIV:
-            return "/";
-        default:
-            return "?";
-        }
-    };
-
-    for (int tok : prog)
-    {
-        if (!is_operator(tok))
-        {
-            // operand: x, 1, 2 ...
-            st.push_back(token_to_string(tok));
-        }
-        else
-        {
-            // binary operator: need two operands on stack
-            if (st.size() < 2)
-            {
-                return "<invalid postfix program>";
-            }
-            std::string rhs = std::move(st.back());
-            st.pop_back();
-            std::string lhs = std::move(st.back());
-            st.pop_back();
-
-            std::string expr = "(" + lhs + " " + op_to_string(tok) + " " + rhs + ")";
-            st.push_back(std::move(expr));
-        }
-    }
-
-    if (st.size() != 1)
-    {
-        return "<invalid postfix program>";
-    }
-    return st.back();
-}
 
 struct Individual
 {
@@ -138,25 +39,10 @@ struct Individual
 using Population = std::vector<Individual>;
 using FOS = std::vector<std::vector<int>>; // Family of Subsets
 
-[[maybe_unused]]
-static void print_FOS(const FOS &fos)
-{
-    std::cout << "FOS subsets:\n";
-    for (size_t i = 0; i < fos.size(); ++i)
-    {
-        std::cout << "  Subset " << i << ": { ";
-        for (int pos : fos[i])
-        {
-            std::cout << pos << " ";
-        }
-        std::cout << "}\n";
-    }
-}
-
 // Evaluate one program on one sample using a simple stack-based VM.
 // If the program is invalid (stack underflow, wrong final stack size, NaN),
 // we return a large penalty.
-static double eval_program_single(const std::vector<int> &prog, double x)
+static double eval_program_single(const std::vector<int> &prog, const std::vector<double>& inputs)
 {
     static const double PENALTY = 1e6;
     std::vector<double> stack;
@@ -166,15 +52,6 @@ static double eval_program_single(const std::vector<int> &prog, double x)
     {
         switch (tok)
         {
-        case VAR_X:
-            stack.push_back(x);
-            break;
-        case CONST_1:
-            stack.push_back(1.0);
-            break;
-        case CONST_2:
-            stack.push_back(2.0);
-            break;
         case OP_ADD:
         case OP_SUB:
         case OP_MUL:
@@ -193,17 +70,53 @@ static double eval_program_single(const std::vector<int> &prog, double x)
                 r = a - b;
             else if (tok == OP_MUL)
                 r = a * b;
-            else
+            else if (tok == OP_DIV)
             {
                 // protected division
-                if (std::fabs(b) < 1e-9)
-                    r = a;
-                else
+                if (std::fabs(b) >= 0.001)
                     r = a / b;
+                else
+                    r = 1;
             }
             if (!std::isfinite(r))
                 return PENALTY;
             stack.push_back(r);
+            break;
+        }
+        case OP_SIN:
+        case OP_COS:
+        case OP_EXP:
+        {
+            if (stack.empty())
+                return PENALTY;
+            stack.pop_back();
+            double a = stack.back();
+            stack.pop_back();
+            double r = 0.0;
+            if (tok == OP_SIN)
+                r = std::sin(a);
+            else if (tok == OP_COS)
+                r = std::cos(a);
+            else if (tok == OP_EXP)
+            {
+                if (a <= 10.0)
+                    r = std::exp(a);
+                else
+                    r = std::exp(10.0); // protect against overflow 
+            }
+            if (!std::isfinite(r))
+                return PENALTY;
+            stack.push_back(r);
+            break;
+        }
+        case VAR_1:
+        case VAR_2:
+        case VAR_3:
+        {
+            int var_idx = tok - VAR_1;
+            if (var_idx < 0 || var_idx >= (int)inputs.size())
+                return PENALTY;
+            stack.push_back(inputs[var_idx]);
             break;
         }
         default:
@@ -226,18 +139,18 @@ static double evaluate_fitness(const std::vector<int> &prog, const Dataset &data
     double sum = 0.0;
     for (const auto &s : data)
     {
-        double y_hat = eval_program_single(prog, s.x);
-        double diff = y_hat - s.y;
+        double y_hat = eval_program_single(prog, s.inputs);
+        double diff = y_hat - s.output;
         sum += diff * diff;
         if (!std::isfinite(sum))
             return 1e12;
     }
-    return sum;
+    return sum / static_cast<double>(data.size());
 }
 
 // Generate a syntactically valid postfix program with only binary operators.
 // genome_len must be odd.
-static std::vector<int> random_program(int genome_len, std::mt19937 &rng)
+static std::vector<int> random_program(int genome_len, std::mt19937 &rng, int num_inputs)
 {
     if (genome_len % 2 == 0)
     {
@@ -279,13 +192,8 @@ static std::vector<int> random_program(int genome_len, std::mt19937 &rng)
 
         if (choose_operand)
         {
-            std::uniform_int_distribution<int> op_dist(0, 2); // x, 1, 2
-            int which = op_dist(rng);
-            int tok = VAR_X;
-            if (which == 1)
-                tok = CONST_1;
-            else if (which == 2)
-                tok = CONST_2;
+            std::uniform_int_distribution<int> op_dist(VAR_1, VAR_1 + num_inputs - 1);
+            int tok = op_dist(rng);
             prog.push_back(tok);
             used_operands++;
             stack_depth++;
@@ -308,22 +216,9 @@ static std::vector<int> random_program(int genome_len, std::mt19937 &rng)
 static Individual random_individual(int genome_len, std::mt19937 &rng, const Dataset &data)
 {
     Individual ind;
-    ind.genome = random_program(genome_len, rng);
+    ind.genome = random_program(genome_len, rng, (int)(data.front().inputs.size()));
     ind.fitness = evaluate_fitness(ind.genome, data);
     return ind;
-}
-
-// Univariate FOS: each position alone
-[[maybe_unused]]
-static FOS make_univariate_fos(int genome_len)
-{
-    FOS fos;
-    fos.reserve(genome_len);
-    for (int i = 0; i < genome_len; ++i)
-    {
-        fos.push_back({i});
-    }
-    return fos;
 }
 
 // Compute pairwise mutual information between genome positions
@@ -543,55 +438,91 @@ static void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std
     }
 }
 
-static Dataset make_synthetic_dataset(int n_samples, const std::vector<int> &target_prog, std::mt19937 &rng)
-{
-    Dataset data;
-    data.reserve(n_samples);
-    std::uniform_real_distribution<double> dist_x(-2.0, 2.0);
-    std::normal_distribution<double> noise(0.0, 0.1); // you can set noise=0 if you want
 
-    for (int i = 0; i < n_samples; ++i)
-    {
-        double x = dist_x(rng);
-        double y_clean = eval_program_single(target_prog, x);
-        double y = y_clean + noise(rng);
-        data.push_back({x, y});
-    }
-    return data;
-}
-
-int main()
+int main(int argc, char **argv)
 {
     // Hyperparameters
     const int POP_SIZE = 4096;
     const int GENOME_LEN = 31; // must be odd
-    const int TARGET_LEN = 31; // target function postfix length
-    const int N_SAMPLES = 128;
-    const int MAX_GENERATIONS = 1000;
+    const int MAX_GENERATIONS = 10;
 
     // Fixed seed for reproducibility
     const unsigned SEED = 123456u;
     std::mt19937 rng(SEED);
 
-    // 1. Generate random target program
-    std::vector<int> target_prog = random_program(TARGET_LEN, rng);
+    if (argc < 4)
+    {
+        std::cerr << "Usage: " << argv[0] << " train.txt test.txt operand_count\n";
+        return 1;
+    }
 
-    // 2. Print target program
-    std::cout << "Target program (postfix): "
-              << program_to_postfix_string(target_prog) << "\n";
+    size_t operand_count = std::stoul(argv[3]);
 
-    std::cout << "Target program (infix):   "
-              << program_to_infix_string(target_prog) << "\n";
+    // Load training data
+    std::ifstream fin_train(argv[1]);
+    if (!fin_train) return 1;
 
-    // 3. Build dataset using target_prog
-    Dataset data = make_synthetic_dataset(N_SAMPLES, target_prog, rng);
+    Dataset train_data;
+    std::string line;
+    size_t line_count = 0;
+    while (std::getline(fin_train, line))
+    {
+        ++line_count;
+        std::istringstream iss(line);
+        std::vector<double> values;
+        double val;
+        while (iss >> val)
+        {
+            values.push_back(val);
+        }
+        if (values.size() != operand_count + 1)
+        {
+            std::cerr << "Error: line " << line_count
+                      << " has incorrect number of values (expected "
+                      << (operand_count + 1) << ", got " << values.size() << ")\n";
+            return 1;
+        }
+        Sample sample;
+        sample.inputs.resize(operand_count);
+        sample.inputs = std::vector<double>(values.begin(), values.begin() + operand_count);
+        sample.output = values[operand_count];
+        train_data.push_back(std::move(sample));
+    }
 
-    // 4. Initialize population
+    // Load testing data
+    std::ifstream fin_test(argv[2]);
+    if (!fin_test) return 1;
+    Dataset test_data;
+    line_count = 0;
+    while (std::getline(fin_test, line))
+    {
+        ++line_count;
+        std::istringstream iss(line);
+        std::vector<double> values;
+        double val;
+        while (iss >> val)
+        {
+            values.push_back(val);
+        }
+        if (values.size() != operand_count + 1)
+        {
+            std::cerr << "Error: line " << line_count
+                      << " has incorrect number of values (expected "
+                      << (operand_count + 1) << ", got " << values.size() << ")\n";
+            return 1;
+        }
+        Sample sample;
+        sample.inputs.resize(operand_count);
+        sample.inputs = std::vector<double>(values.begin(), values.begin() + operand_count);
+        sample.output = values[operand_count];
+        test_data.push_back(std::move(sample));
+    }
+
     Population pop;
     pop.reserve(POP_SIZE);
     for (int i = 0; i < POP_SIZE; ++i)
     {
-        pop.push_back(random_individual(GENOME_LEN, rng, data));
+        pop.push_back(random_individual(GENOME_LEN, rng, train_data));
     }
 
     const int actual_genome_len = (int)pop.front().genome.size();
@@ -610,23 +541,16 @@ int main()
 
     for (int gen = 0; gen < MAX_GENERATIONS; ++gen)
     {
-        // Rebuild FOS from current population using MI-based linkage tree
         FOS fos = build_linkage_tree_fos(pop, actual_genome_len);
-        // print_FOS(fos); // uncomment to debug FOS
 
-        gomea_step(pop, fos, data, rng);
+        gomea_step(pop, fos, train_data, rng);
         best_it = get_best();
         std::cout << "Gen " << gen + 1 << ": best fitness = " << best_it->fitness << '\n';
     }
 
-    std::cout << "Done. Final best fitness: " << best_it->fitness << '\n';
-
-    // Print final program
-    std::cout << "Best program (postfix): "
-              << program_to_postfix_string(best_it->genome) << "\n";
-
-    std::cout << "Best program (infix):   "
-              << program_to_infix_string(best_it->genome) << "\n";
+    // Evaluate best on test set
+    double test_fitness = evaluate_fitness(best_it->genome, test_data);
+    std::cout << "Best test fitness: " << test_fitness << '\n';
 
     return 0;
 }
