@@ -1,34 +1,46 @@
-NVCC       := nvcc
-CXX        := g++
+# Build: make
+# Override GPU arch: make ARCH=86
 
-TARGET     := gpg_parallel
+TARGET    := gpg_parallel
+BUILD_DIR := build
 
-INCLUDES   := -I.
+CXX  := g++
+NVCC := nvcc
 
-CXXFLAGS   := -O3 -std=c++17 $(INCLUDES)
-NVCCFLAGS  := -O3 -std=c++17 $(INCLUDES) \
-              -gencode arch=compute_89,code=sm_89 \
-              -gencode arch=compute_89,code=compute_89
+ARCH ?= 89
 
-SRCS_CPP   := main.cpp gpg_cpu.cpp
-SRCS_CU    := gpg_cuda.cu
+INCLUDES  := -Iinclude -Isrc
 
-OBJS_CPP   := $(SRCS_CPP:.cpp=.o)
-OBJS_CU    := $(SRCS_CU:.cu=.o)
-OBJS       := $(OBJS_CPP) $(OBJS_CU)
+CXXFLAGS  := -O3 -std=c++17 $(INCLUDES) -MMD -MP
+NVCCFLAGS := -O3 -std=c++17 $(INCLUDES) -MMD -MP \
+            -gencode arch=compute_$(ARCH),code=sm_$(ARCH) \
+            -gencode arch=compute_$(ARCH),code=compute_$(ARCH)
+
+SRCS_CPP := src/main.cpp src/gomea.cpp
+SRCS_CU  := src/fitness_cuda.cu
+
+OBJS_CPP := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SRCS_CPP))
+OBJS_CU  := $(patsubst src/%.cu,$(BUILD_DIR)/%.o,$(SRCS_CU))
+OBJS     := $(OBJS_CPP) $(OBJS_CU)
+DEPS     := $(OBJS:.o=.d)
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(NVCC) $(NVCCFLAGS) $^ -o $@
 
-%.o: %.cpp
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-%.o: %.cu
+$(BUILD_DIR)/%.o: src/%.cu | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
+-include $(DEPS)
+
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET)
 
 .PHONY: all clean

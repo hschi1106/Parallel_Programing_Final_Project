@@ -1,4 +1,5 @@
 #include <bits/stdc++.h>
+#include <chrono>
 
 // Simplified GP-GOMEA baseline (CPU only)
 // - Representation: fixed-length postfix program (sequence of integer tokens)
@@ -481,6 +482,8 @@ static void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std
 
 int main(int argc, char **argv)
 {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     // Hyperparameters
     const int POP_SIZE = 4096;
     const int GENOME_LEN = 15; // must be odd
@@ -595,6 +598,10 @@ int main(int argc, char **argv)
     // Print final program
     std::cout << "Best program (postfix): "
               << program_to_postfix_string(best_it->genome) << "\n";
+
+    auto end_time =   std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << "Total elapsed time: " << elapsed.count() << " seconds\n";
 
     return 0;
 }

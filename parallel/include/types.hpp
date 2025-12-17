@@ -1,4 +1,4 @@
-// gpg_types.hpp
+// types.hpp
 #pragma once
 
 #include <vector>
@@ -40,3 +40,16 @@ struct Individual
 
 using Population = std::vector<Individual>;
 using FOS = std::vector<std::vector<int>>; // Family of Subsets
+
+struct GpuEvalContext
+{
+    const Dataset *host_data = nullptr; // 用來做「這個 ctx 對應哪個 Dataset」的檢查
+    int N = 0;
+    int D = 0;
+    int prog_len = 0;
+
+    double *d_X = nullptr;   // [N*D]
+    double *d_y = nullptr;   // [N]
+    int *d_prog = nullptr;   // [prog_len]
+    double *d_sum = nullptr; // [1]
+};

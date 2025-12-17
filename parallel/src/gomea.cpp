@@ -1,11 +1,54 @@
-// gpg_cpu.cpp
-#include "gpg_types.hpp"
-#include "gpg_cpu.hpp"
-#include "gpg_cuda.hpp"
+// gomea.cpp
+#include "types.hpp"
+#include "gomea.hpp"
+#include "fitness_cuda.hpp"
 #include <random>
 #include <algorithm>
 #include <numeric>
 #include <iostream>
+
+// ========== Utility ==========
+
+std::string token_to_string(int tok)
+{
+    switch (tok)
+    {
+    case OP_ADD:
+        return "+";
+    case OP_SUB:
+        return "-";
+    case OP_MUL:
+        return "*";
+    case OP_DIV:
+        return "/";
+    case OP_SIN:
+        return "sin";
+    case OP_COS:
+        return "cos";
+    case OP_EXP:
+        return "exp";
+    case VAR_1:
+        return "x1";
+    case VAR_2:
+        return "x2";
+    case VAR_3:
+        return "x3";
+    default:
+        return "?";
+    }
+}
+
+std::string program_to_postfix_string(const std::vector<int> &prog)
+{
+    std::ostringstream oss;
+    for (size_t i = 0; i < prog.size(); ++i)
+    {
+        if (i > 0)
+            oss << ' ';
+        oss << token_to_string(prog[i]);
+    }
+    return oss.str();
+}
 
 // ========== Program evaluation ==========
 double eval_program_single_cpu(const std::vector<int> &prog, const std::vector<double> &inputs)
@@ -112,6 +155,13 @@ double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data)
     return sum / static_cast<double>(data.size());
 }
 
+double evaluate_fitness(const std::vector<int>& prog, const Dataset& data,
+                               GpuEvalContext* ctx)
+{
+  if (ctx && ctx->host_data == &data) return evaluate_fitness_gpu(*ctx, prog);
+  return evaluate_fitness_cpu(prog, data);
+}
+
 // ========== GP functions ==========
 std::vector<int> random_program(int genome_len, std::mt19937 &rng, int num_inputs)
 {
@@ -178,7 +228,7 @@ Individual random_individual(int genome_len, std::mt19937 &rng, const Dataset &d
 {
     Individual ind;
     ind.genome = random_program(genome_len, rng, (int)(data.front().inputs.size()));
-    ind.fitness = evaluate_fitness_cpu(ind.genome, data);
+    ind.fitness = evaluate_fitness(ind.genome, data, nullptr);
     return ind;
 }
 
@@ -324,7 +374,7 @@ FOS build_linkage_tree_fos(const Population &pop, int genome_len)
     return fos;
 }
 
-void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng)
+void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng, GpuEvalContext* ctx)
 {
     std::uniform_int_distribution<int> pop_dist(0, (int)pop.size() - 1);
 
@@ -370,7 +420,7 @@ void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt199
                 candidate.genome[pos] = donor.genome[pos];
             }
 
-            double new_f = evaluate_fitness_cpu(candidate.genome, data);
+            double new_f = evaluate_fitness(candidate.genome, data, ctx);
             if (new_f < candidate.fitness)
             {
                 candidate.fitness = new_f; // accept

@@ -1,17 +1,20 @@
 // main.cpp
-#include "gpg_types.hpp"
-#include "gpg_cpu.hpp"
-#include "gpg_cuda.hpp"
+#include "types.hpp"
+#include "gomea.hpp"
+#include "fitness_cuda.hpp"
 #include <random>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 
 int main(int argc, char **argv)
 {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     // Hyperparameters
     const int POP_SIZE = 4096;
-    const int GENOME_LEN = 31; // must be odd
+    const int GENOME_LEN = 15; // must be odd
     const int MAX_GENERATIONS = 10;
 
     // Fixed seed for reproducibility
@@ -28,7 +31,8 @@ int main(int argc, char **argv)
 
     // Load training data
     std::ifstream fin_train(argv[1]);
-    if (!fin_train) return 1;
+    if (!fin_train)
+        return 1;
 
     Dataset train_data;
     std::string line;
@@ -59,7 +63,8 @@ int main(int argc, char **argv)
 
     // Load testing data
     std::ifstream fin_test(argv[2]);
-    if (!fin_test) return 1;
+    if (!fin_test)
+        return 1;
     Dataset test_data;
     line_count = 0;
     while (std::getline(fin_test, line))
@@ -86,6 +91,9 @@ int main(int argc, char **argv)
         test_data.push_back(std::move(sample));
     }
 
+    GpuEvalContext train_ctx;
+    gpu_eval_init(train_ctx, train_data, operand_count, GENOME_LEN);
+
     Population pop;
     pop.reserve(POP_SIZE);
     for (int i = 0; i < POP_SIZE; ++i)
@@ -111,14 +119,24 @@ int main(int argc, char **argv)
     {
         FOS fos = build_linkage_tree_fos(pop, actual_genome_len);
 
-        gomea_step(pop, fos, train_data, rng);
+        gomea_step(pop, fos, train_data, rng, &train_ctx);
         best_it = get_best();
         std::cout << "Gen " << gen + 1 << ": best fitness = " << best_it->fitness << '\n';
     }
 
     // Evaluate best on test set
-    double test_fitness = evaluate_fitness_cpu(best_it->genome, test_data);
+    double test_fitness = evaluate_fitness(best_it->genome, test_data, nullptr);
     std::cout << "Best test fitness: " << test_fitness << '\n';
+
+    // Print final program
+    std::cout << "Best program (postfix): "
+              << program_to_postfix_string(best_it->genome) << "\n";
+
+    gpu_eval_destroy(train_ctx);
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << "Total elapsed time: " << elapsed.count() << " seconds\n";
 
     return 0;
 }
