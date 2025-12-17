@@ -30,6 +30,79 @@ enum Token : int
     TOKEN_MAX = 9
 };
 
+#include <sstream>
+
+std::string token_to_string(int tok) {
+    switch (tok) {
+    case OP_ADD: return "+";
+    case OP_SUB: return "-";
+    case OP_MUL: return "*";
+    case OP_DIV: return "/";
+    case OP_SIN: return "sin";
+    case OP_COS: return "cos";
+    case OP_EXP: return "exp";
+    default:
+        if (tok >= VAR_1) {
+            // 將 VAR_1 轉為 "x0", VAR_2 轉為 "x1"... 以此類推
+            return "x" + std::to_string(tok - VAR_1);
+        }
+        return "?";
+    }
+}
+
+std::string program_to_postfix_string(const std::vector<int> &prog) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < prog.size(); ++i) {
+        if (i > 0) oss << ' ';
+        oss << token_to_string(prog[i]);
+    }
+    return oss.str();
+}
+
+std::string program_to_infix_string(const std::vector<int> &prog) {
+    std::vector<std::string> st;
+    st.reserve(32);
+
+    for (int tok : prog) {
+        if (tok >= VAR_1) {
+            // 變數 (Operand) -> 直接推入堆疊
+            st.push_back(token_to_string(tok));
+        } 
+        else if (tok == OP_SIN || tok == OP_COS || tok == OP_EXP) {
+            // 一元運算子 (Unary) -> 需要 1 個運算元
+            if (st.empty()) return "<invalid postfix program>";
+            
+            std::string a = std::move(st.back());
+            st.pop_back();
+
+            // 格式：op(a)
+            std::string op = token_to_string(tok);
+            st.push_back(op + "(" + a + ")");
+        } 
+        else if (tok == OP_ADD || tok == OP_SUB || tok == OP_MUL || tok == OP_DIV) {
+            // 二元運算子 (Binary) -> 需要 2 個運算元
+            if (st.size() < 2) return "<invalid postfix program>";
+
+            std::string rhs = std::move(st.back());
+            st.pop_back();
+            std::string lhs = std::move(st.back());
+            st.pop_back();
+
+            // 格式：(lhs op rhs)
+            std::string op = token_to_string(tok);
+            st.push_back("(" + lhs + " " + op + " " + rhs + ")");
+        } 
+        else {
+            return "<unknown token>";
+        }
+    }
+
+    if (st.size() != 1) {
+        return "<invalid postfix program>";
+    }
+    return st.back();
+}
+
 struct Individual
 {
     std::vector<int> genome; // token sequence (postfix)
@@ -551,6 +624,12 @@ int main(int argc, char **argv)
     // Evaluate best on test set
     double test_fitness = evaluate_fitness(best_it->genome, test_data);
     std::cout << "Best test fitness: " << test_fitness << '\n';
+    // Print final program
+    std::cout << "Best program (postfix): "
+              << program_to_postfix_string(best_it->genome) << "\n";
+    // Print input program
+    std::cout << "Best program (infix):   "
+              << program_to_infix_string(best_it->genome) << "\n";
 
     return 0;
 }
