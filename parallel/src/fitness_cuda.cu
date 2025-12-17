@@ -9,24 +9,9 @@
 #include <limits>
 #include <cmath>
 
-namespace {
+// ============= fitness_cuda_kernels.cuh =============
 
 __device__ __forceinline__ bool finite_dev(double x) { return isfinite(x); }
-
-__device__ __forceinline__ double atomicAdd_double(double* addr, double val) {
-#if __CUDA_ARCH__ >= 600
-    return atomicAdd(addr, val);
-#else
-    unsigned long long int* address_as_ull = (unsigned long long int*)addr;
-    unsigned long long int old = *address_as_ull, assumed;
-    do {
-        assumed = old;
-        old = atomicCAS(address_as_ull, assumed,
-                        __double_as_longlong(val + __longlong_as_double(assumed)));
-    } while (assumed != old);
-    return __longlong_as_double(old);
-#endif
-}
 
 // Device VM: mirrors CPU semantics (penalty / protected ops).
 __device__ double eval_program_single_dev(const int* prog, int prog_len,
@@ -136,10 +121,10 @@ __global__ void fitness_kernel_single_prog_kernel(const int* d_prog, int prog_le
         __syncthreads();
     }
 
-    if (tid == 0) atomicAdd_double(d_sum_out, sh[0]);
+    if (tid == 0) atomicAdd(d_sum_out, sh[0]);
 }
 
-} // namespace
+// ============= fitness_cuda.hpp =============
 
 void gpu_eval_init(GpuEvalContext& ctx, const Dataset& data, int operand_count, int prog_len)
 {
