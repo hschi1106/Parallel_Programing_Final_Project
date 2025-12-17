@@ -190,7 +190,7 @@ double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data)
     return sum;
 }
 
-double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu = false)
+double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu)
 {
     if (is_gpu)
     {
@@ -201,8 +201,6 @@ double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool 
         return evaluate_fitness_cpu(prog, data);
     }
 }
-
-[[maybe_unused]]
 void evaluate_population_cpu(Population &pop, const Dataset &data)
 {
     for (auto &ind : pop)
@@ -504,7 +502,9 @@ void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt199
                 candidate.genome[pos] = donor.genome[pos];
             }
 
-            double new_f = evaluate_fitness(candidate.genome, data);
+            // === 修改處: 強制使用 GPU 進行評估 ===
+            double new_f = evaluate_fitness(candidate.genome, data, true);
+            
             if (new_f < candidate.fitness)
             {
                 candidate.fitness = new_f; // accept

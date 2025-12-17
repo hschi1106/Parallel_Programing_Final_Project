@@ -20,7 +20,7 @@ double eval_program_single(const std::vector<int> &prog, double x);
 
 // Evaluate fitness (MSE) of one program on the whole dataset.
 double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data);
-double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu);
+double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu = false);
 
 // Evaluate fitness for the whole population.
 void evaluate_population_cpu(Population &pop, const Dataset &data);
