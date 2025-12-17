@@ -7,114 +7,10 @@
 #include <numeric>
 #include <iostream>
 
-// ========== Utilities for programs ==========
-std::string token_to_string(int tok)
-{
-    switch (tok)
-    {
-    case VAR_X:
-        return "x";
-    case CONST_1:
-        return "1";
-    case CONST_2:
-        return "2";
-    case OP_ADD:
-        return "+";
-    case OP_SUB:
-        return "-";
-    case OP_MUL:
-        return "*";
-    case OP_DIV:
-        return "/";
-    default:
-        return "?";
-    }
-}
-
-std::string program_to_postfix_string(const std::vector<int> &prog)
-{
-    std::ostringstream oss;
-    for (size_t i = 0; i < prog.size(); ++i)
-    {
-        if (i > 0)
-            oss << ' ';
-        oss << token_to_string(prog[i]);
-    }
-    return oss.str();
-}
-
-std::string program_to_infix_string(const std::vector<int> &prog)
-{
-    std::vector<std::string> st;
-    st.reserve(32);
-
-    auto is_operator = [](int tok)
-    {
-        return tok == OP_ADD || tok == OP_SUB || tok == OP_MUL || tok == OP_DIV;
-    };
-
-    auto op_to_string = [](int tok) -> std::string
-    {
-        switch (tok)
-        {
-        case OP_ADD:
-            return "+";
-        case OP_SUB:
-            return "-";
-        case OP_MUL:
-            return "*";
-        case OP_DIV:
-            return "/";
-        default:
-            return "?";
-        }
-    };
-
-    for (int tok : prog)
-    {
-        if (!is_operator(tok))
-        {
-            st.push_back(token_to_string(tok));
-        }
-        else
-        {
-            if (st.size() < 2)
-                return "<invalid postfix program>";
-
-            std::string rhs = std::move(st.back());
-            st.pop_back();
-            std::string lhs = std::move(st.back());
-            st.pop_back();
-
-            std::string expr = "(" + lhs + " " + op_to_string(tok) + " " + rhs + ")";
-            st.push_back(std::move(expr));
-        }
-    }
-
-    if (st.size() != 1)
-        return "<invalid postfix program>";
-    return st.back();
-}
-
-[[maybe_unused]]
-void print_FOS(const FOS &fos)
-{
-    std::cout << "FOS subsets:\n";
-    for (size_t i = 0; i < fos.size(); ++i)
-    {
-        std::cout << "  Subset " << i << ": { ";
-        for (int pos : fos[i])
-        {
-            std::cout << pos << " ";
-        }
-        std::cout << "}\n";
-    }
-}
-
 // ========== Program evaluation ==========
-double eval_program_single(const std::vector<int> &prog, double x)
+double eval_program_single(const std::vector<int> &prog, const std::vector<double>& inputs)
 {
-    static double PENALTY = 1e6;
+    static const double PENALTY = 1e6;
     std::vector<double> stack;
     stack.reserve(32);
 
@@ -122,15 +18,6 @@ double eval_program_single(const std::vector<int> &prog, double x)
     {
         switch (tok)
         {
-        case VAR_X:
-            stack.push_back(x);
-            break;
-        case CONST_1:
-            stack.push_back(1.0);
-            break;
-        case CONST_2:
-            stack.push_back(2.0);
-            break;
         case OP_ADD:
         case OP_SUB:
         case OP_MUL:
@@ -149,17 +36,53 @@ double eval_program_single(const std::vector<int> &prog, double x)
                 r = a - b;
             else if (tok == OP_MUL)
                 r = a * b;
-            else
+            else if (tok == OP_DIV)
             {
                 // protected division
-                if (std::fabs(b) < 1e-9)
-                    r = a;
-                else
+                if (std::fabs(b) >= 0.001)
                     r = a / b;
+                else
+                    r = 1;
             }
             if (!std::isfinite(r))
                 return PENALTY;
             stack.push_back(r);
+            break;
+        }
+        case OP_SIN:
+        case OP_COS:
+        case OP_EXP:
+        {
+            if (stack.empty())
+                return PENALTY;
+            stack.pop_back();
+            double a = stack.back();
+            stack.pop_back();
+            double r = 0.0;
+            if (tok == OP_SIN)
+                r = std::sin(a);
+            else if (tok == OP_COS)
+                r = std::cos(a);
+            else if (tok == OP_EXP)
+            {
+                if (a <= 10.0)
+                    r = std::exp(a);
+                else
+                    r = std::exp(10.0); // protect against overflow 
+            }
+            if (!std::isfinite(r))
+                return PENALTY;
+            stack.push_back(r);
+            break;
+        }
+        case VAR_1:
+        case VAR_2:
+        case VAR_3:
+        {
+            int var_idx = tok - VAR_1;
+            if (var_idx < 0 || var_idx >= (int)inputs.size())
+                return PENALTY;
+            stack.push_back(inputs[var_idx]);
             break;
         }
         default:
@@ -181,38 +104,17 @@ double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data)
     double sum = 0.0;
     for (const auto &s : data)
     {
-        double y_hat = eval_program_single(prog, s.x);
-        double diff = y_hat - s.y;
+        double y_hat = eval_program_single(prog, s.inputs);
+        double diff = y_hat - s.output;
         sum += diff * diff;
         if (!std::isfinite(sum))
             return 1e12;
     }
-    return sum;
-}
-
-double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu = false)
-{
-    if (is_gpu)
-    {
-        return evaluate_fitness_gpu(prog, data);
-    }
-    else
-    {
-        return evaluate_fitness_cpu(prog, data);
-    }
-}
-
-[[maybe_unused]]
-void evaluate_population_cpu(Population &pop, const Dataset &data)
-{
-    for (auto &ind : pop)
-    {
-        ind.fitness = evaluate_fitness_cpu(ind.genome, data);
-    }
+    return sum / static_cast<double>(data.size());
 }
 
 // ========== GP functions ==========
-std::vector<int> random_program(int genome_len, std::mt19937 &rng)
+std::vector<int> random_program(int genome_len, std::mt19937 &rng, int num_inputs)
 {
     if (genome_len % 2 == 0)
     {
@@ -254,13 +156,8 @@ std::vector<int> random_program(int genome_len, std::mt19937 &rng)
 
         if (choose_operand)
         {
-            std::uniform_int_distribution<int> op_dist(0, 2); // x, 1, 2
-            int which = op_dist(rng);
-            int tok = VAR_X;
-            if (which == 1)
-                tok = CONST_1;
-            else if (which == 2)
-                tok = CONST_2;
+            std::uniform_int_distribution<int> op_dist(VAR_1, VAR_1 + num_inputs - 1);
+            int tok = op_dist(rng);
             prog.push_back(tok);
             used_operands++;
             stack_depth++;
@@ -281,43 +178,13 @@ std::vector<int> random_program(int genome_len, std::mt19937 &rng)
 Individual random_individual(int genome_len, std::mt19937 &rng, const Dataset &data)
 {
     Individual ind;
-    ind.genome = random_program(genome_len, rng);
-    ind.fitness = evaluate_fitness(ind.genome, data);
+    ind.genome = random_program(genome_len, rng, (int)(data.front().inputs.size()));
+    ind.fitness = evaluate_fitness_cpu(ind.genome, data);
     return ind;
 }
 
-Dataset make_synthetic_dataset(int n_samples, const std::vector<int> &target_prog,
-                               const std::pair<double, double> x_range, const double noise_bound,
-                               std::mt19937 &rng)
-{
-    Dataset data;
-    data.reserve(n_samples);
-    std::uniform_real_distribution<double> dist_x(x_range.first, x_range.second);
-    std::normal_distribution<double> noise(0.0, noise_bound);
-
-    for (int i = 0; i < n_samples; ++i)
-    {
-        double x = dist_x(rng);
-        double y_clean = eval_program_single(target_prog, x);
-        double y = y_clean + noise(rng);
-        data.push_back({x, y});
-    }
-    return data;
-}
-
-[[maybe_unused]]
-FOS make_univariate_fos(int genome_len)
-{
-    FOS fos;
-    fos.reserve(genome_len);
-    for (int i = 0; i < genome_len; ++i)
-    {
-        fos.push_back({i});
-    }
-    return fos;
-}
-
-std::vector<std::vector<double>> compute_mutual_information_matrix(const Population &pop, int genome_len)
+std::vector<std::vector<double>>
+compute_mutual_information_matrix(const Population &pop, int genome_len)
 {
     const int n = genome_len;
     std::vector<std::vector<double>> mi(n, std::vector<double>(n, 0.0));
@@ -504,7 +371,7 @@ void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt199
                 candidate.genome[pos] = donor.genome[pos];
             }
 
-            double new_f = evaluate_fitness(candidate.genome, data);
+            double new_f = evaluate_fitness_cpu(candidate.genome, data);
             if (new_f < candidate.fitness)
             {
                 candidate.fitness = new_f; // accept

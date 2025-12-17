@@ -3,39 +3,97 @@
 #include "gpg_cpu.hpp"
 #include "gpg_cuda.hpp"
 #include <random>
+#include <fstream>
 #include <iostream>
 #include <algorithm>
 
-int main()
+int main(int argc, char **argv)
 {
+    // Hyperparameters
     const int POP_SIZE = 4096;
-    const int GENOME_LEN = 31;
-    const int TARGET_LEN = 31;
-    const int N_SAMPLES = 128;
-    const int MAX_GENERATIONS = 1000;
-    const unsigned SEED = 123456u;
+    const int GENOME_LEN = 31; // must be odd
+    const int MAX_GENERATIONS = 10;
 
+    // Fixed seed for reproducibility
+    const unsigned SEED = 123456u;
     std::mt19937 rng(SEED);
 
-    // 1. Target program
-    std::vector<int> target_prog = random_program(TARGET_LEN, rng);
-    std::cout << "Target program (postfix): "
-              << program_to_postfix_string(target_prog) << "\n";
-    std::cout << "Target program (infix):   "
-              << program_to_infix_string(target_prog) << "\n";
+    if (argc < 4)
+    {
+        std::cerr << "Usage: " << argv[0] << " train.txt test.txt operand_count\n";
+        return 1;
+    }
 
-    // 2. Dataset
-    Dataset data = make_synthetic_dataset(N_SAMPLES, target_prog, std::make_pair(-100.0, 100.0), 0.1, rng);
+    size_t operand_count = std::stoul(argv[3]);
 
-    // 3. Population init (CPU)
+    // Load training data
+    std::ifstream fin_train(argv[1]);
+    if (!fin_train) return 1;
+
+    Dataset train_data;
+    std::string line;
+    size_t line_count = 0;
+    while (std::getline(fin_train, line))
+    {
+        ++line_count;
+        std::istringstream iss(line);
+        std::vector<double> values;
+        double val;
+        while (iss >> val)
+        {
+            values.push_back(val);
+        }
+        if (values.size() != operand_count + 1)
+        {
+            std::cerr << "Error: line " << line_count
+                      << " has incorrect number of values (expected "
+                      << (operand_count + 1) << ", got " << values.size() << ")\n";
+            return 1;
+        }
+        Sample sample;
+        sample.inputs.resize(operand_count);
+        sample.inputs = std::vector<double>(values.begin(), values.begin() + operand_count);
+        sample.output = values[operand_count];
+        train_data.push_back(std::move(sample));
+    }
+
+    // Load testing data
+    std::ifstream fin_test(argv[2]);
+    if (!fin_test) return 1;
+    Dataset test_data;
+    line_count = 0;
+    while (std::getline(fin_test, line))
+    {
+        ++line_count;
+        std::istringstream iss(line);
+        std::vector<double> values;
+        double val;
+        while (iss >> val)
+        {
+            values.push_back(val);
+        }
+        if (values.size() != operand_count + 1)
+        {
+            std::cerr << "Error: line " << line_count
+                      << " has incorrect number of values (expected "
+                      << (operand_count + 1) << ", got " << values.size() << ")\n";
+            return 1;
+        }
+        Sample sample;
+        sample.inputs.resize(operand_count);
+        sample.inputs = std::vector<double>(values.begin(), values.begin() + operand_count);
+        sample.output = values[operand_count];
+        test_data.push_back(std::move(sample));
+    }
+
     Population pop;
     pop.reserve(POP_SIZE);
     for (int i = 0; i < POP_SIZE; ++i)
     {
-        pop.push_back(random_individual(GENOME_LEN, rng, data));
+        pop.push_back(random_individual(GENOME_LEN, rng, train_data));
     }
 
-    const int genome_len = (int)pop.front().genome.size();
+    const int actual_genome_len = (int)pop.front().genome.size();
 
     auto get_best = [&]()
     {
@@ -49,27 +107,18 @@ int main()
     auto best_it = get_best();
     std::cout << "Initial best fitness: " << best_it->fitness << '\n';
 
-    gpu_init(data);
-
     for (int gen = 0; gen < MAX_GENERATIONS; ++gen)
     {
-        FOS fos = build_linkage_tree_fos(pop, genome_len);
+        FOS fos = build_linkage_tree_fos(pop, actual_genome_len);
 
-        gomea_step(pop, fos, data, rng);
-
+        gomea_step(pop, fos, train_data, rng);
         best_it = get_best();
         std::cout << "Gen " << gen + 1 << ": best fitness = " << best_it->fitness << '\n';
     }
 
-    gpu_free();
-
-    best_it = get_best();
-    std::cout << "Done. Final best fitness: " << best_it->fitness << '\n';
-
-    std::cout << "Best program (postfix): "
-              << program_to_postfix_string(best_it->genome) << "\n";
-    std::cout << "Best program (infix):   "
-              << program_to_infix_string(best_it->genome) << "\n";
+    // Evaluate best on test set
+    double test_fitness = evaluate_fitness_cpu(best_it->genome, test_data);
+    std::cout << "Best test fitness: " << test_fitness << '\n';
 
     return 0;
 }
