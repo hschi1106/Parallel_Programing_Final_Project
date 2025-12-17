@@ -8,7 +8,7 @@
 #include <iostream>
 
 // ========== Program evaluation ==========
-double eval_program_single(const std::vector<int> &prog, const std::vector<double>& inputs)
+double eval_program_single_cpu(const std::vector<int> &prog, const std::vector<double> &inputs)
 {
     static const double PENALTY = 1e6;
     std::vector<double> stack;
@@ -55,7 +55,6 @@ double eval_program_single(const std::vector<int> &prog, const std::vector<doubl
         {
             if (stack.empty())
                 return PENALTY;
-            stack.pop_back();
             double a = stack.back();
             stack.pop_back();
             double r = 0.0;
@@ -68,7 +67,7 @@ double eval_program_single(const std::vector<int> &prog, const std::vector<doubl
                 if (a <= 10.0)
                     r = std::exp(a);
                 else
-                    r = std::exp(10.0); // protect against overflow 
+                    r = std::exp(10.0); // protect against overflow
             }
             if (!std::isfinite(r))
                 return PENALTY;
@@ -104,7 +103,7 @@ double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data)
     double sum = 0.0;
     for (const auto &s : data)
     {
-        double y_hat = eval_program_single(prog, s.inputs);
+        double y_hat = eval_program_single_cpu(prog, s.inputs);
         double diff = y_hat - s.output;
         sum += diff * diff;
         if (!std::isfinite(sum))
@@ -164,7 +163,7 @@ std::vector<int> random_program(int genome_len, std::mt19937 &rng, int num_input
         }
         else
         {
-            std::uniform_int_distribution<int> f_dist(OP_ADD, OP_DIV);
+            std::uniform_int_distribution<int> f_dist(OP_ADD, OP_EXP);
             int tok = f_dist(rng);
             prog.push_back(tok);
             used_funcs++;

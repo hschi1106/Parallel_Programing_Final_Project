@@ -30,6 +30,47 @@ enum Token : int
     TOKEN_MAX = 9
 };
 
+static std::string token_to_string(int tok)
+{
+    switch (tok)
+    {
+    case OP_ADD:
+        return "+";
+    case OP_SUB:
+        return "-";
+    case OP_MUL:
+        return "*";
+    case OP_DIV:
+        return "/";
+    case OP_SIN:
+        return "sin";
+    case OP_COS:
+        return "cos";
+    case OP_EXP:
+        return "exp";
+    case VAR_1:
+        return "x1";
+    case VAR_2:
+        return "x2";
+    case VAR_3:
+        return "x3";
+    default:
+        return "?";
+    }
+}
+
+static std::string program_to_postfix_string(const std::vector<int> &prog)
+{
+    std::ostringstream oss;
+    for (size_t i = 0; i < prog.size(); ++i)
+    {
+        if (i > 0)
+            oss << ' ';
+        oss << token_to_string(prog[i]);
+    }
+    return oss.str();
+}
+
 struct Individual
 {
     std::vector<int> genome; // token sequence (postfix)
@@ -89,7 +130,6 @@ static double eval_program_single(const std::vector<int> &prog, const std::vecto
         {
             if (stack.empty())
                 return PENALTY;
-            stack.pop_back();
             double a = stack.back();
             stack.pop_back();
             double r = 0.0;
@@ -200,7 +240,7 @@ static std::vector<int> random_program(int genome_len, std::mt19937 &rng, int nu
         }
         else
         {
-            std::uniform_int_distribution<int> f_dist(OP_ADD, OP_DIV);
+            std::uniform_int_distribution<int> f_dist(OP_ADD, OP_EXP);
             int tok = f_dist(rng);
             prog.push_back(tok);
             used_funcs++;
@@ -443,7 +483,7 @@ int main(int argc, char **argv)
 {
     // Hyperparameters
     const int POP_SIZE = 4096;
-    const int GENOME_LEN = 31; // must be odd
+    const int GENOME_LEN = 15; // must be odd
     const int MAX_GENERATIONS = 10;
 
     // Fixed seed for reproducibility
@@ -551,6 +591,10 @@ int main(int argc, char **argv)
     // Evaluate best on test set
     double test_fitness = evaluate_fitness(best_it->genome, test_data);
     std::cout << "Best test fitness: " << test_fitness << '\n';
+
+    // Print final program
+    std::cout << "Best program (postfix): "
+              << program_to_postfix_string(best_it->genome) << "\n";
 
     return 0;
 }

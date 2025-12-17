@@ -9,11 +9,10 @@
 // Evaluate one program on one sample using a simple stack-based VM.
 // If the program is invalid (stack underflow, wrong final stack size, NaN),
 // we return a large penalty.
-double eval_program_single(const std::vector<int> &prog, const std::vector<double>& inputs);
+double eval_program_single_cpu(const std::vector<int> &prog, const std::vector<double>& inputs);
 
 // Evaluate fitness (MSE) of one program on the whole dataset.
 double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data);
-double evaluate_fitness(const std::vector<int> &prog, const Dataset &data, bool is_gpu);
 
 // ========== GP functions ==========
 
