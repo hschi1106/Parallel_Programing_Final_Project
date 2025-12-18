@@ -119,7 +119,7 @@ int main(int argc, char **argv)
     {
         FOS fos = build_linkage_tree_fos(pop, actual_genome_len);
 
-        gomea_step(pop, fos, train_data, rng, &train_ctx);
+        gomea_step(pop, fos, train_data, rng, &train_ctx, POP_SIZE / 128);
         best_it = get_best();
         std::cout << "Gen " << gen + 1 << ": best fitness = " << best_it->fitness << '\n';
     }

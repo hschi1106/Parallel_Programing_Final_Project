@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iostream>
+#include <cstring>
 
 // ========== Utility ==========
 
@@ -374,72 +375,128 @@ FOS build_linkage_tree_fos(const Population &pop, int genome_len)
     return fos;
 }
 
-void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng, GpuEvalContext* ctx)
+void gomea_step(Population &pop, const FOS &fos, const Dataset &data,
+               std::mt19937 &rng, GpuEvalContext* ctx, int pop_batch)
 {
+    if (pop.empty() || fos.empty()) return;
+    if (pop_batch <= 0) pop_batch = 1;
+
     std::uniform_int_distribution<int> pop_dist(0, (int)pop.size() - 1);
 
-    // Random permutation of indices
+    // Random permutation of indices (still keep global random order)
     std::vector<int> order(pop.size());
     std::iota(order.begin(), order.end(), 0);
     std::shuffle(order.begin(), order.end(), rng);
 
-    for (int idx : order)
+    const int genome_len = (int)pop[0].genome.size();
+
+    // Process population in batches; within each batch, use donors from the *current* global pop,
+    // but delay committing updates until the batch finishes.
+    for (int b0 = 0; b0 < (int)order.size(); b0 += pop_batch)
     {
-        Individual &base = pop[idx];
-        Individual candidate = base;
+        const int B = std::min(pop_batch, (int)order.size() - b0);
 
-        // Random order of subsets for this individual
-        std::vector<int> fos_idx(fos.size());
-        std::iota(fos_idx.begin(), fos_idx.end(), 0);
-        std::shuffle(fos_idx.begin(), fos_idx.end(), rng);
+        std::vector<int> batch_idx(B);
+        for (int i = 0; i < B; ++i) batch_idx[i] = order[b0 + i];
 
-        for (int fi : fos_idx)
+        // Snapshot base individuals for this batch
+        std::vector<Individual> base_batch(B);
+        std::vector<Individual> cand_batch(B);
+        for (int i = 0; i < B; ++i)
         {
-            const auto &subset = fos[fi];
+            base_batch[i] = pop[batch_idx[i]];
+            cand_batch[i] = base_batch[i];
+        }
 
-            // pick a random donor different from idx
-            int donor_idx = idx;
-            while (donor_idx == idx)
-            {
-                donor_idx = pop_dist(rng);
-            }
-            const Individual &donor = pop[donor_idx];
+        // Per-individual random order over FOS
+        std::vector<std::vector<int>> fos_orders(B, std::vector<int>(fos.size()));
+        for (int i = 0; i < B; ++i)
+        {
+            std::iota(fos_orders[i].begin(), fos_orders[i].end(), 0);
+            std::shuffle(fos_orders[i].begin(), fos_orders[i].end(), rng);
+        }
 
-            // backup
-            std::vector<int> backup_genes;
-            backup_genes.reserve(subset.size());
-            for (int pos : subset)
-            {
-                backup_genes.push_back(candidate.genome[pos]);
-            }
+        // Reusable buffers for batched evaluation (B programs, each genome_len)
+        std::vector<int> progs_flat((size_t)B * (size_t)genome_len);
+        std::vector<double> new_f((size_t)B);
 
-            // mix genes from donor
-            for (size_t k = 0; k < subset.size(); ++k)
-            {
-                int pos = subset[k];
-                candidate.genome[pos] = donor.genome[pos];
-            }
+        // Per-individual backup for rejection
+        std::vector<std::vector<int>> backup_genes(B);
+        std::vector<const std::vector<int>*> backup_subset(B, nullptr);
 
-            double new_f = evaluate_fitness(candidate.genome, data, ctx);
-            if (new_f < candidate.fitness)
+        // Iterate "subset steps" in lockstep; each individual may be testing a different subset at this step.
+        for (size_t step = 0; step < fos.size(); ++step)
+        {
+            // Build B trial candidates
+            for (int i = 0; i < B; ++i)
             {
-                candidate.fitness = new_f; // accept
-            }
-            else
-            {
-                // reject -> restore
+                const int idx = batch_idx[i];
+                const int fi = fos_orders[i][step];
+                const auto &subset = fos[fi];
+                backup_subset[i] = &subset;
+
+                // pick a random donor different from idx (from global pop as requested)
+                int donor_idx = idx;
+                while (donor_idx == idx) donor_idx = pop_dist(rng);
+                const Individual &donor = pop[donor_idx];
+
+                // backup current genes for this subset
+                backup_genes[i].clear();
+                backup_genes[i].reserve(subset.size());
+                for (int pos : subset) backup_genes[i].push_back(cand_batch[i].genome[pos]);
+
+                // mix genes from donor
                 for (size_t k = 0; k < subset.size(); ++k)
                 {
                     int pos = subset[k];
-                    candidate.genome[pos] = backup_genes[k];
+                    cand_batch[i].genome[pos] = donor.genome[pos];
+                }
+
+                // flatten whole genome for GPU batch eval
+                std::memcpy(&progs_flat[(size_t)i * (size_t)genome_len],
+                            cand_batch[i].genome.data(),
+                            (size_t)genome_len * sizeof(int));
+            }
+
+            // Evaluate all B trials together (GPU if available, else CPU fallback)
+            if (ctx && ctx->host_data == &data)
+            {
+                evaluate_fitness_gpu_batch(*ctx, progs_flat.data(), B, new_f.data());
+            }
+            else
+            {
+                for (int i = 0; i < B; ++i)
+                    new_f[i] = evaluate_fitness_cpu(cand_batch[i].genome, data);
+            }
+
+            // Accept / reject per individual
+            for (int i = 0; i < B; ++i)
+            {
+                const auto &subset = *backup_subset[i];
+                const double nf = new_f[i];
+
+                if (nf < cand_batch[i].fitness)
+                {
+                    cand_batch[i].fitness = nf; // accept
+                }
+                else
+                {
+                    // reject -> restore
+                    for (size_t k = 0; k < subset.size(); ++k)
+                    {
+                        int pos = subset[k];
+                        cand_batch[i].genome[pos] = backup_genes[i][k];
+                    }
                 }
             }
         }
 
-        // Replace if improved
-        if (candidate.fitness < base.fitness)
+        // Commit updates back to global pop after finishing the whole batch
+        for (int i = 0; i < B; ++i)
         {
-            base = std::move(candidate);
+            int idx = batch_idx[i];
+            if (cand_batch[i].fitness < pop[idx].fitness)
+                pop[idx] = std::move(cand_batch[i]);
         }
     }
 }

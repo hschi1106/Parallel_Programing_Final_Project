@@ -124,6 +124,53 @@ __global__ void fitness_kernel_single_prog_kernel(const int* d_prog, int prog_le
     if (tid == 0) atomicAdd(d_sum_out, sh[0]);
 }
 
+// ===================== Batched evaluation kernel =====================
+// grid.x = program index (0..batch-1)
+// grid.y = "slice" index over samples (tiles), to increase parallelism for large N.
+// Each block reduces its local sum and atomicAdds into d_sums_out[p].
+__global__ void fitness_kernel_batch_kernel(const int *d_progs, int prog_len,
+                                            const double *d_X, const double *d_y,
+                                            int N, int D, int batch, double *d_sums_out)
+{
+    int p = (int)blockIdx.x;
+    if (p >= batch) return;
+
+    __shared__ double sh[256];
+    int tid = (int)threadIdx.x;
+
+    const int blocks_y = (int)gridDim.y;
+    const int by = (int)blockIdx.y;
+
+    const int *prog = d_progs + (size_t)p * (size_t)prog_len;
+
+    double local = 0.0;
+    // Iterate over samples assigned to this (p, by, tid)
+    for (int s = by * (int)blockDim.x + tid; s < N; s += (int)blockDim.x * blocks_y)
+    {
+        const double *x = d_X + (size_t)s * (size_t)D;
+        double y_hat = eval_program_single_dev(prog, prog_len, x, D);
+        double diff = y_hat - d_y[s];
+        local += diff * diff;
+
+        if (!finite_dev(local)) { local = 1e12; break; }
+    }
+
+    sh[tid] = local;
+    __syncthreads();
+
+    for (int off = (int)blockDim.x / 2; off > 0; off >>= 1)
+    {
+        if (tid < off) sh[tid] += sh[tid + off];
+        __syncthreads();
+    }
+
+    if (tid == 0)
+    {
+        atomicAdd(&d_sums_out[p], sh[0]);
+    }
+}
+
+
 // ============= fitness_cuda.hpp =============
 
 void gpu_eval_init(GpuEvalContext& ctx, const Dataset& data, int operand_count, int prog_len)
@@ -177,6 +224,9 @@ void gpu_eval_destroy(GpuEvalContext& ctx)
     if (ctx.d_y) CUDA_CHECK(cudaFree(ctx.d_y));
     if (ctx.d_prog) CUDA_CHECK(cudaFree(ctx.d_prog));
     if (ctx.d_sum) CUDA_CHECK(cudaFree(ctx.d_sum));
+    if (ctx.d_progs_batch) CUDA_CHECK(cudaFree(ctx.d_progs_batch));
+    if (ctx.d_sums_batch) CUDA_CHECK(cudaFree(ctx.d_sums_batch));
+
     ctx = GpuEvalContext{};
 }
 
@@ -204,4 +254,64 @@ double evaluate_fitness_gpu(GpuEvalContext& ctx, const std::vector<int>& prog)
     double out = sum / (double)ctx.N;
     if (!std::isfinite(out)) return 1e12;
     return out;
+}
+
+
+static void ensure_batch_buffers(GpuEvalContext &ctx, int batch)
+{
+    if (batch <= 0) return;
+    if (ctx.batch_cap >= batch && ctx.d_progs_batch && ctx.d_sums_batch) return;
+
+    // grow to next power of two for fewer reallocs
+    int cap = 1;
+    while (cap < batch) cap <<= 1;
+
+    if (ctx.d_progs_batch) CUDA_CHECK(cudaFree(ctx.d_progs_batch));
+    if (ctx.d_sums_batch) CUDA_CHECK(cudaFree(ctx.d_sums_batch));
+
+    CUDA_CHECK(cudaMalloc(&ctx.d_progs_batch, (size_t)cap * (size_t)ctx.prog_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&ctx.d_sums_batch, (size_t)cap * sizeof(double)));
+    ctx.batch_cap = cap;
+}
+
+// Evaluate multiple programs (flattened) in a single kernel launch.
+// Output is mean squared error (sum/N) per program.
+void evaluate_fitness_gpu_batch(GpuEvalContext &ctx, const int *h_progs_flat, int batch, double *h_out)
+{
+    if (batch <= 0) return;
+    if (ctx.N == 0) {
+        for (int i = 0; i < batch; ++i) h_out[i] = std::numeric_limits<double>::infinity();
+        return;
+    }
+    if (!h_progs_flat || !h_out) return;
+
+    ensure_batch_buffers(ctx, batch);
+
+    const size_t bytes = (size_t)batch * (size_t)ctx.prog_len * sizeof(int);
+    CUDA_CHECK(cudaMemcpy(ctx.d_progs_batch, h_progs_flat, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(ctx.d_sums_batch, 0, (size_t)batch * sizeof(double)));
+
+    const int threads = 256;
+    int blocks_y = (ctx.N + threads - 1) / threads;
+    if (blocks_y < 1) blocks_y = 1;
+    if (blocks_y > 64) blocks_y = 64; // cap to avoid ridiculous grid.y
+
+    dim3 block(threads);
+    dim3 grid((unsigned)batch, (unsigned)blocks_y);
+
+    fitness_kernel_batch_kernel<<<grid, block>>>(
+        ctx.d_progs_batch, ctx.prog_len, ctx.d_X, ctx.d_y, ctx.N, ctx.D, batch, ctx.d_sums_batch);
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<double> sums((size_t)batch);
+    CUDA_CHECK(cudaMemcpy(sums.data(), ctx.d_sums_batch, (size_t)batch * sizeof(double), cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < batch; ++i)
+    {
+        double out = sums[(size_t)i] / (double)ctx.N;
+        if (!std::isfinite(out)) out = 1e12;
+        h_out[i] = out;
+    }
 }

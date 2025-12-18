@@ -24,3 +24,7 @@ __device__ double eval_program_single_dev(const int *prog, int prog_len,
 __global__ void fitness_kernel_single_prog_kernel(const int *d_prog, int prog_len,
                                                   const double *d_X, const double *d_y,
                                                   int N, int D, double *d_sum_out);
+// Batched kernel: one kernel launch evaluates multiple programs.
+__global__ void fitness_kernel_batch_kernel(const int *d_progs, int prog_len,
+                                            const double *d_X, const double *d_y,
+                                            int N, int D, int batch, double *d_sums_out);

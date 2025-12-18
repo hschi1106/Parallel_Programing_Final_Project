@@ -41,4 +41,4 @@ std::vector<std::vector<double>> compute_mutual_information_matrix(const Populat
 FOS build_linkage_tree_fos(const Population &pop, int genome_len);
 
 // One GOMEA generation using given FOS.
-void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng, GpuEvalContext *ctx);
+void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng, GpuEvalContext *ctx, int pop_batch = 32);

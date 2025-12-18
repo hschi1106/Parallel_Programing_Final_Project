@@ -52,4 +52,9 @@ struct GpuEvalContext
     double *d_y = nullptr;   // [N]
     int *d_prog = nullptr;   // [prog_len]
     double *d_sum = nullptr; // [1]
+
+    // --- batch evaluation buffers (programs x batch) ---
+    int batch_cap = 0;          // allocated capacity (number of programs)
+    int *d_progs_batch = nullptr;   // [batch_cap * prog_len]
+    double *d_sums_batch = nullptr; // [batch_cap]
 };
