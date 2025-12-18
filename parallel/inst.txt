@@ -1,0 +1,2 @@
+./gpg_serial  ../benchmarks/keijzer7_train.txt ../benchmarks/keijzer7_test.txt 1 | tee out.log
+./gpg_parallel  ../benchmarks/keijzer7_train.txt ../benchmarks/keijzer7_test.txt 1 | tee out.log

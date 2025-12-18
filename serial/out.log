@@ -9,6 +9,16 @@ Gen 7: best fitness = 0.0105035
 Gen 8: best fitness = 0.0105035
 Gen 9: best fitness = 0.0105035
 Gen 10: best fitness = 0.0105035
+Gen 11: best fitness = 0.0105035
+Gen 12: best fitness = 0.0105035
+Gen 13: best fitness = 0.0105035
+Gen 14: best fitness = 0.0105035
+Gen 15: best fitness = 0.0105035
+Gen 16: best fitness = 0.0105035
+Gen 17: best fitness = 0.0105035
+Gen 18: best fitness = 0.0105035
+Gen 19: best fitness = 0.0105035
+Gen 20: best fitness = 0.0105035
 Best test fitness: 0.00663447
 Best program (postfix): x0 x0 * x0 - x0 - x0 / x0 + x0 x0 x0 + / x0 x0 x0 / x0 - x0 x0 * + / x0 + + /
 Best program (infix):   ((((((x0 * x0) - x0) - x0) / x0) + x0) / ((x0 / (x0 + x0)) + ((x0 / (((x0 / x0) - x0) + (x0 * x0))) + x0)))

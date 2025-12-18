@@ -164,7 +164,7 @@ static double eval_program_single(const std::vector<int> &prog, const std::vecto
                 return PENALTY;
             stack.pop_back();
             double a = stack.back();
-            stack.pop_back();
+            // stack.pop_back();
             double r = 0.0;
             if (tok == OP_SIN)
                 r = std::sin(a);
@@ -517,7 +517,7 @@ int main(int argc, char **argv)
     // Hyperparameters
     const int POP_SIZE = 4096;
     const int GENOME_LEN = 31; // must be odd
-    const int MAX_GENERATIONS = 10;
+    const int MAX_GENERATIONS = 20;
 
     // Fixed seed for reproducibility
     const unsigned SEED = 123456u;
