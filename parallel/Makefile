@@ -7,12 +7,12 @@ BUILD_DIR := build
 CXX  := g++
 NVCC := nvcc
 
-ARCH ?= 89
+ARCH ?= 86
 
 INCLUDES  := -Iinclude -Isrc
 
 CXXFLAGS  := -O3 -std=c++17 $(INCLUDES) -MMD -MP
-NVCCFLAGS := -O3 -std=c++17 $(INCLUDES) -MMD -MP \
+NVCCFLAGS := -ccbin $(CXX) -O3 -std=c++17 $(INCLUDES) -MMD -MP \
             -gencode arch=compute_$(ARCH),code=sm_$(ARCH) \
             -gencode arch=compute_$(ARCH),code=compute_$(ARCH)
 

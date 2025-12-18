@@ -1,1 +1,20 @@
 ./gpg_serial ../benchmarks/feynman-1-26-2_train.txt ../benchmarks/feynman-1-26-2_test.txt 2
+
+./gpg_serial  ../benchmarks/keijzer7_train.txt ../benchmarks/keijzer7_test.txt 1
+./gpg_parallel  ../benchmarks/keijzer7_train.txt ../benchmarks/keijzer7_test.txt 1
+./gpg_parallel  ../benchmarks/nguyen6_train.txt  ../benchmarks/nguyen6_test.txt 1
+./gpg_parallel  ../benchmarks/nguyen9_train.txt  ../benchmarks/nguyen9_test.txt 2
+./gpg_parallel  ../benchmarks/feynman-1-26-2_train.txt  ../benchmarks/feynman-1-26-2_test.txt 2
+./gpg_parallel  ../benchmarks/feynman-1-47-23_train.txt  ../benchmarks/feynman-1-47-23_test.txt 3
+
+ncu --set full -o report ./gpg_parallel  ../benchmarks/nguyen6_train.txt  ../benchmarks/nguyen6_test.txt 1
+
+sudo /usr/local/cuda/bin/ncu --set full -o report ./gpg_parallel  ../benchmarks/nguyen6_train.txt  ../benchmarks/nguyen6_test.txt 1
+sudo /usr/local/cuda/bin/nvprof ./gpg_parallel  ../benchmarks/nguyen6_train.txt  ../benchmarks/nguyen6_test.txt 1
+
+fitness_kernel_single_prog_kernel
+
+sudo /usr/local/cuda/bin/ncu --kernel-name "fitness_kernel_single_prog_kernel" \
+    --section LaunchStats --section SpeedOfLight --section MemoryWorkloadAnalysis --section ComputeWorkloadAnalysis \
+    ./gpg_parallel  ../benchmarks/nguyen6_train.txt  ../benchmarks/nguyen6_test.txt 1
+

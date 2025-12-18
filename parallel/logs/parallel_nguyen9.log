@@ -1,0 +1,14 @@
+Initial best fitness: 0.166107
+Gen 1: best fitness = 0.0044388
+Gen 2: best fitness = 0.000141666
+Gen 3: best fitness = 1.36456e-12
+Gen 4: best fitness = 1.36456e-12
+Gen 5: best fitness = 1.36456e-12
+Gen 6: best fitness = 1.36456e-12
+Gen 7: best fitness = 1.36456e-12
+Gen 8: best fitness = 1.36456e-12
+Gen 9: best fitness = 1.36456e-12
+Gen 10: best fitness = 1.36456e-12
+Best test fitness: 1.21118e-12
+Best program (postfix): x1 x1 sin x2 x2 * sin x1 - x2 * x2 / + +
+Total elapsed time: 25.7213 seconds
