@@ -8,6 +8,8 @@
 #include <vector>
 #include <limits>
 #include <cmath>
+#include <cstring>
+#include <algorithm>
 
 // ============= fitness_cuda_kernels.cuh =============
 
@@ -128,11 +130,14 @@ __global__ void fitness_kernel_single_prog_kernel(const int* d_prog, int prog_le
 
 void gpu_eval_init(GpuEvalContext& ctx, const Dataset& data, int operand_count, int prog_len)
 {
+    // Reset first (so destroy can be safely called on partial init)
+    ctx = GpuEvalContext{};
+    ctx.host_data = &data;
+    ctx.prog_len = prog_len;
+
     if (data.empty())
     {
-        ctx = GpuEvalContext{};
-        ctx.host_data = &data;
-        ctx.prog_len = prog_len;
+        // Nothing to allocate. (evaluate_fitness_gpu will return +inf.)
         return;
     }
     if (operand_count <= 0)
@@ -140,68 +145,153 @@ void gpu_eval_init(GpuEvalContext& ctx, const Dataset& data, int operand_count, 
         std::cerr << "operand_count must be > 0\n";
         std::exit(1);
     }
+    // Token set currently supports VAR_1..VAR_3 only.
     if (operand_count > 3)
     {
-        std::cerr << "operand_count=" << operand_count
-                  << " but tokens only support VAR_1..VAR_3\n";
+        std::cerr << "operand_count > 3 is not supported by current token set (VAR_1..VAR_3)\n";
+        std::exit(1);
+    }
+    if (prog_len <= 0)
+    {
+        std::cerr << "prog_len must be > 0\n";
         std::exit(1);
     }
 
-    ctx.host_data = &data;
     ctx.N = (int)data.size();
     ctx.D = operand_count;
-    ctx.prog_len = prog_len;
 
-    std::vector<double> hX((size_t)ctx.N * (size_t)ctx.D);
-    std::vector<double> hy((size_t)ctx.N);
+    // Pack host dataset into contiguous arrays for GPU
+    std::vector<double> h_X((size_t)ctx.N * (size_t)ctx.D);
+    std::vector<double> h_y((size_t)ctx.N);
 
     for (int i = 0; i < ctx.N; ++i)
     {
+        const auto& s = data[(size_t)i];
         for (int j = 0; j < ctx.D; ++j)
-            hX[(size_t)i * (size_t)ctx.D + (size_t)j] = data[i].inputs[j];
-        hy[i] = data[i].output;
+            h_X[(size_t)i * (size_t)ctx.D + (size_t)j] = s.inputs[(size_t)j];
+        h_y[(size_t)i] = s.output;
     }
 
-    CUDA_CHECK(cudaMalloc(&ctx.d_X, hX.size() * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&ctx.d_y, hy.size() * sizeof(double)));
-    CUDA_CHECK(cudaMemcpy(ctx.d_X, hX.data(), hX.size() * sizeof(double), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(ctx.d_y, hy.data(), hy.size() * sizeof(double), cudaMemcpyHostToDevice));
+    // Device allocations
+    CUDA_CHECK(cudaMalloc((void**)&ctx.d_X, h_X.size() * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void**)&ctx.d_y, h_y.size() * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void**)&ctx.d_prog, (size_t)ctx.prog_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void**)&ctx.d_sum, sizeof(double)));
 
-    CUDA_CHECK(cudaMalloc(&ctx.d_prog, (size_t)ctx.prog_len * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&ctx.d_sum, sizeof(double)));
+    CUDA_CHECK(cudaMemcpy(ctx.d_X, h_X.data(), h_X.size() * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(ctx.d_y, h_y.data(), h_y.size() * sizeof(double), cudaMemcpyHostToDevice));
+
+    // Pinned host buffers (required for async memcpy nodes in graphs)
+    CUDA_CHECK(cudaMallocHost((void**)&ctx.h_prog_pinned, (size_t)ctx.prog_len * sizeof(int)));
+    CUDA_CHECK(cudaMallocHost((void**)&ctx.h_sum_pinned, sizeof(double)));
+
+    // Stream for graph launches
+    cudaStream_t stream = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    ctx.stream = (void*)stream;
+
+    // Build a CUDA Graph for: H2D(prog) -> memset(sum) -> kernel -> D2H(sum)
+    const int threads = 256;
+    int blocks = (ctx.N + threads - 1) / threads;
+    if (blocks > 65535) blocks = 65535;
+
+    cudaGraph_t graph = nullptr;
+
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+
+    CUDA_CHECK(cudaMemcpyAsync(ctx.d_prog,
+                              ctx.h_prog_pinned,
+                              (size_t)ctx.prog_len * sizeof(int),
+                              cudaMemcpyHostToDevice,
+                              stream));
+
+    CUDA_CHECK(cudaMemsetAsync(ctx.d_sum, 0, sizeof(double), stream));
+
+    fitness_kernel_single_prog_kernel<<<blocks, threads, 0, stream>>>(
+        ctx.d_prog, ctx.prog_len, ctx.d_X, ctx.d_y, ctx.N, ctx.D, ctx.d_sum);
+    CUDA_CHECK(cudaGetLastError());
+
+    CUDA_CHECK(cudaMemcpyAsync(ctx.h_sum_pinned,
+                              ctx.d_sum,
+                              sizeof(double),
+                              cudaMemcpyDeviceToHost,
+                              stream));
+
+    CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+
+    cudaGraphExec_t graphExec = nullptr;
+    CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    CUDA_CHECK(cudaGraphDestroy(graph));
+
+    ctx.graph_exec = (void*)graphExec;
 }
+
 
 void gpu_eval_destroy(GpuEvalContext& ctx)
 {
-    if (ctx.d_X) CUDA_CHECK(cudaFree(ctx.d_X));
-    if (ctx.d_y) CUDA_CHECK(cudaFree(ctx.d_y));
-    if (ctx.d_prog) CUDA_CHECK(cudaFree(ctx.d_prog));
-    if (ctx.d_sum) CUDA_CHECK(cudaFree(ctx.d_sum));
+    // Destroy graph + stream first (they may reference device allocations)
+    if (ctx.graph_exec)
+    {
+        CUDA_CHECK(cudaGraphExecDestroy((cudaGraphExec_t)ctx.graph_exec));
+        ctx.graph_exec = nullptr;
+    }
+    if (ctx.stream)
+    {
+        CUDA_CHECK(cudaStreamDestroy((cudaStream_t)ctx.stream));
+        ctx.stream = nullptr;
+    }
+
+    if (ctx.h_prog_pinned)
+    {
+        CUDA_CHECK(cudaFreeHost(ctx.h_prog_pinned));
+        ctx.h_prog_pinned = nullptr;
+    }
+    if (ctx.h_sum_pinned)
+    {
+        CUDA_CHECK(cudaFreeHost(ctx.h_sum_pinned));
+        ctx.h_sum_pinned = nullptr;
+    }
+
+    if (ctx.d_X)
+    {
+        CUDA_CHECK(cudaFree(ctx.d_X));
+        ctx.d_X = nullptr;
+    }
+    if (ctx.d_y)
+    {
+        CUDA_CHECK(cudaFree(ctx.d_y));
+        ctx.d_y = nullptr;
+    }
+    if (ctx.d_prog)
+    {
+        CUDA_CHECK(cudaFree(ctx.d_prog));
+        ctx.d_prog = nullptr;
+    }
+    if (ctx.d_sum)
+    {
+        CUDA_CHECK(cudaFree(ctx.d_sum));
+        ctx.d_sum = nullptr;
+    }
+
     ctx = GpuEvalContext{};
 }
+
 
 double evaluate_fitness_gpu(GpuEvalContext& ctx, const std::vector<int>& prog)
 {
     if (ctx.N == 0) return std::numeric_limits<double>::infinity();
     if ((int)prog.size() != ctx.prog_len) return 1e12;
+    if (!ctx.h_prog_pinned || !ctx.h_sum_pinned || !ctx.stream || !ctx.graph_exec) return 1e12;
 
-    CUDA_CHECK(cudaMemcpy(ctx.d_prog, prog.data(), (size_t)prog.size() * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemset(ctx.d_sum, 0, sizeof(double)));
+    // Update pinned host program buffer (graph copies from this address every launch)
+    std::memcpy(ctx.h_prog_pinned, prog.data(), (size_t)ctx.prog_len * sizeof(int));
 
-    const int threads = 256;
-    int blocks = (ctx.N + threads - 1) / threads;
-    if (blocks > 65535) blocks = 65535;
+    CUDA_CHECK(cudaGraphLaunch((cudaGraphExec_t)ctx.graph_exec, (cudaStream_t)ctx.stream));
+    CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)ctx.stream));
 
-    fitness_kernel_single_prog_kernel<<<blocks, threads>>>(
-        ctx.d_prog, ctx.prog_len, ctx.d_X, ctx.d_y, ctx.N, ctx.D, ctx.d_sum);
-
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    double sum = 0.0;
-    CUDA_CHECK(cudaMemcpy(&sum, ctx.d_sum, sizeof(double), cudaMemcpyDeviceToHost));
-
+    double sum = *(ctx.h_sum_pinned);
     double out = sum / (double)ctx.N;
     if (!std::isfinite(out)) return 1e12;
     return out;
 }
+

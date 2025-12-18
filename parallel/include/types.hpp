@@ -52,4 +52,13 @@ struct GpuEvalContext
     double *d_y = nullptr;   // [N]
     int *d_prog = nullptr;   // [prog_len]
     double *d_sum = nullptr; // [1]
+
+    // ---- CUDA Graphs cached execution (opaque to pure C++ TUs) ----
+    // Pinned host buffers for async copies inside the graph.
+    int *h_prog_pinned = nullptr;   // [prog_len] pinned (cudaMallocHost)
+    double *h_sum_pinned = nullptr; // [1] pinned (cudaMallocHost)
+
+    // Opaque handles (stored as void* to avoid cuda headers in .hpp).
+    void *stream = nullptr;     // cudaStream_t
+    void *graph_exec = nullptr; // cudaGraphExec_t
 };
