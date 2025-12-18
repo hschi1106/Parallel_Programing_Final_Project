@@ -92,7 +92,8 @@ int main(int argc, char **argv)
     }
 
     GpuEvalContext train_ctx;
-    gpu_eval_init(train_ctx, train_data, operand_count, GENOME_LEN);
+    // gpu_eval_init(train_ctx, train_data, operand_count, GENOME_LEN);
+    gpu_eval_init(train_ctx, train_data, operand_count, GENOME_LEN, POP_SIZE, SEED);
 
     Population pop;
     pop.reserve(POP_SIZE);

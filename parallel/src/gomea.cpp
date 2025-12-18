@@ -158,7 +158,7 @@ double evaluate_fitness_cpu(const std::vector<int> &prog, const Dataset &data)
 double evaluate_fitness(const std::vector<int>& prog, const Dataset& data,
                                GpuEvalContext* ctx)
 {
-  if (ctx && ctx->host_data == &data) return evaluate_fitness_gpu(*ctx, prog);
+//   if (ctx && ctx->host_data == &data) return evaluate_fitness_gpu(*ctx, prog);
   return evaluate_fitness_cpu(prog, data);
 }
 
@@ -376,70 +376,18 @@ FOS build_linkage_tree_fos(const Population &pop, int genome_len)
 
 void gomea_step(Population &pop, const FOS &fos, const Dataset &data, std::mt19937 &rng, GpuEvalContext* ctx)
 {
-    std::uniform_int_distribution<int> pop_dist(0, (int)pop.size() - 1);
-
-    // Random permutation of indices
-    std::vector<int> order(pop.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::shuffle(order.begin(), order.end(), rng);
-
-    for (int idx : order)
-    {
-        Individual &base = pop[idx];
-        Individual candidate = base;
-
-        // Random order of subsets for this individual
-        std::vector<int> fos_idx(fos.size());
-        std::iota(fos_idx.begin(), fos_idx.end(), 0);
-        std::shuffle(fos_idx.begin(), fos_idx.end(), rng);
-
-        for (int fi : fos_idx)
-        {
-            const auto &subset = fos[fi];
-
-            // pick a random donor different from idx
-            int donor_idx = idx;
-            while (donor_idx == idx)
-            {
-                donor_idx = pop_dist(rng);
-            }
-            const Individual &donor = pop[donor_idx];
-
-            // backup
-            std::vector<int> backup_genes;
-            backup_genes.reserve(subset.size());
-            for (int pos : subset)
-            {
-                backup_genes.push_back(candidate.genome[pos]);
-            }
-
-            // mix genes from donor
-            for (size_t k = 0; k < subset.size(); ++k)
-            {
-                int pos = subset[k];
-                candidate.genome[pos] = donor.genome[pos];
-            }
-
-            double new_f = evaluate_fitness(candidate.genome, data, ctx);
-            if (new_f < candidate.fitness)
-            {
-                candidate.fitness = new_f; // accept
-            }
-            else
-            {
-                // reject -> restore
-                for (size_t k = 0; k < subset.size(); ++k)
-                {
-                    int pos = subset[k];
-                    candidate.genome[pos] = backup_genes[k];
-                }
-            }
-        }
-
-        // Replace if improved
-        if (candidate.fitness < base.fitness)
-        {
-            base = std::move(candidate);
-        }
+    if (!ctx) {
+        std::cerr << "Error: GpuEvalContext is null in gomea_step\n";
+        return;
     }
+
+    // 1. Move Population to GPU
+    gpu_load_population(*ctx, pop);
+
+    // 2. Run All-in-One Generation Kernel
+    // (Load -> Shuffle FOS -> Mix -> Eval -> Accept/Reject -> WriteBack)
+    gpu_run_gomea_generation(*ctx, fos);
+
+    // 3. Retrieve Population
+    gpu_retrieve_population(*ctx, pop);
 }

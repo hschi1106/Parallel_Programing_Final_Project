@@ -1,1 +1,3 @@
 ./gpg_serial ../benchmarks/feynman-1-26-2_train.txt ../benchmarks/feynman-1-26-2_test.txt 2
+
+./gpg_parallel ../benchmarks/feynman-1-26-2_train.txt ../benchmarks/feynman-1-26-2_test.txt 2

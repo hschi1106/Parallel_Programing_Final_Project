@@ -598,6 +598,8 @@ int main(int argc, char **argv)
     // Print final program
     std::cout << "Best program (postfix): "
               << program_to_postfix_string(best_it->genome) << "\n";
+    // std::cout << "inputs : "
+    //           << program_to_postfix_string(pop.genome) << "\n";
 
     auto end_time =   std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
